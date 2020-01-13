@@ -36,12 +36,12 @@ class SequenceNStepReturnBuffer(BaseNStepReturnBuffer):
         super().__init__(example=buffer_example, size=size, B=B, **kwargs)
         if rnn_state_interval > 1:
             assert self.T % rnn_state_interval == 0
-        self.rnn_T = self.T // rnn_state_interval
+            self.rnn_T = self.T // rnn_state_interval
 
     def append_samples(self, samples):
         t, rsi = self.t, self.rnn_state_interval
         if rsi <= 1:  # All or no rnn states stored.
-            return super().append_smaples(samples)
+            return super().append_samples(samples)
         buffer_samples = SamplesToBuffer(*(v for k, v in samples.items()
             if k != "prev_rnn_state"))
         T, idxs = super().append_samples(buffer_samples)

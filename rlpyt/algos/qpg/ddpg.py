@@ -7,6 +7,8 @@ from rlpyt.utils.quick_args import save__init__args
 from rlpyt.utils.logging import logger
 from rlpyt.replays.non_sequence.uniform import (UniformReplayBuffer,
     AsyncUniformReplayBuffer)
+from rlpyt.replays.non_sequence.time_limit import (TlUniformReplayBuffer,
+    AsyncTlUniformReplayBuffer)
 from rlpyt.utils.collections import namedarraytuple
 from rlpyt.utils.tensor import valid_mean
 from rlpyt.algos.utils import valid_from_done
@@ -14,7 +16,7 @@ from rlpyt.algos.utils import valid_from_done
 OptInfo = namedtuple("OptInfo",
     ["muLoss", "qLoss", "muGradNorm", "qGradNorm"])
 SamplesToBuffer = namedarraytuple("SamplesToBuffer",
-    ["observation", "action", "reward", "done"])
+    ["observation", "action", "reward", "done", "timeout"])
 
 
 class DDPG(RlAlgorithm):
@@ -40,6 +42,7 @@ class DDPG(RlAlgorithm):
             q_target_clip=1e6,
             n_step_return=1,
             updates_per_sync=1,  # For async mode only.
+            bootstrap_timelimit=True,
             ):
         if optim_kwargs is None:
             optim_kwargs = dict()
@@ -94,6 +97,7 @@ class DDPG(RlAlgorithm):
             action=examples["action"],
             reward=examples["reward"],
             done=examples["done"],
+            timeout=getattr(examples["env_info"], "timeout", None)
         )
         replay_kwargs = dict(
             example=example_to_buffer,
@@ -101,7 +105,10 @@ class DDPG(RlAlgorithm):
             B=batch_spec.B,
             n_step_return=self.n_step_return,
         )
-        ReplayCls = AsyncUniformReplayBuffer if async_ else UniformReplayBuffer
+        if not self.bootstrap_timelimit:
+            ReplayCls = AsyncUniformReplayBuffer if async_ else UniformReplayBuffer
+        else:
+            ReplayCls = AsyncTlUniformReplayBuffer if async_ else TlUniformReplayBuffer
         self.replay_buffer = ReplayCls(**replay_kwargs)
 
     def optimize_agent(self, itr, samples=None, sampler_itr=None):
@@ -115,9 +122,13 @@ class DDPG(RlAlgorithm):
         for _ in range(self.updates_per_optimize):
             samples_from_replay = self.replay_buffer.sample_batch(self.batch_size)
             if self.mid_batch_reset and not self.agent.recurrent:
-                valid = None  # OR: torch.ones_like(samples.done, dtype=torch.float)
+                valid = torch.ones_like(samples_from_replay.done, dtype=torch.float)
             else:
                 valid = valid_from_done(samples_from_replay.done)
+            if self.bootstrap_timelimit:
+                # To avoid non-use of bootstrap when environment is 'done' due to
+                # time-limit, turn off training on these samples.
+                valid *= (1 - samples_from_replay.timeout_n.float())
             self.q_optimizer.zero_grad()
             q_loss = self.q_loss(samples_from_replay, valid)
             q_loss.backward()
@@ -146,6 +157,7 @@ class DDPG(RlAlgorithm):
             action=samples.agent.action,
             reward=samples.env.reward,
             done=samples.env.done,
+            timeout=getattr(samples.env.env_info, "timeout", None)
         )
 
     def mu_loss(self, samples, valid):
@@ -167,7 +179,7 @@ class DDPG(RlAlgorithm):
 
     def optim_state_dict(self):
         return dict(q=self.q_optimizer.state_dict(),
-            mu=self.mu_optimizer.state_dict)
+            mu=self.mu_optimizer.state_dict())
 
     def load_optim_state_dict(self, state_dict):
         self.q_optimizer.load_state_dict(state_dict["q"])

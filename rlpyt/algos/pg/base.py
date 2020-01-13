@@ -32,6 +32,7 @@ class PolicyGradientAlgo(RlAlgorithm):
         reward, done, value, bv = (samples.env.reward, samples.env.done,
             samples.agent.agent_info.value, samples.agent.bootstrap_value)
         done = done.type(reward.dtype)
+
         if self.gae_lambda == 1:  # GAE reduces to empirical discounted.
             return_ = discount_return(reward, done, bv, self.discount)
             advantage = return_ - value
@@ -42,7 +43,7 @@ class PolicyGradientAlgo(RlAlgorithm):
         if not self.mid_batch_reset or self.agent.recurrent:
             valid = valid_from_done(done)  # Recurrent: no reset during training.
         else:
-            valid = None  # OR: torch.ones_like(done)
+            valid = None  # OR torch.ones_like(done)
 
         if self.normalize_advantage:
             if valid is not None:
